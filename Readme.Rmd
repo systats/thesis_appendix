@@ -1,0 +1,533 @@
+---
+title: "The Good, the Bad, and the Ugly"
+substitle: "Replication File"
+output: github_document
+---
+
+```{r setup, include = F}
+knitr::opts_chunk$set(echo = T, warning = F, message = F, error = F)
+```
+
+
+## Packages 
+
+```{r}
+pacman::p_load(tidyverse, purrr, lubridate, visdat, glue, ggpubr, janitor, tidyr, arm, stargazer, broom, ggthemes, stringr, forcats)
+
+theme_set(theme_classic2())
+
+add_election <- function(x){
+  x %>%
+    split(.$party) %>%
+    map(~{
+      .x %>% 
+      unique %>%
+      geom_rect(
+        data = ., 
+        aes(xmin = year, xmax = dplyr::lead(year), ymin = -Inf, ymax = Inf, fill = factor(gov)), 
+        color = NA, alpha = .1
+      )
+    })
+}
+```
+
+
+# German Bundestag Speeches
+
+Parsed from XML Files.
+
+This is the regex to extract features like party_leder (group) for each legislative period. 
+
+```{r}
+party_leader19 <- c(
+  "Alexander Gauland", "Alice Weidel",
+  "Volker Kauder", 
+  "Andrea Nahles",
+  "Christian Lindner",
+  "Anton Hofreiter", "Katrin Göring-Eckardt",
+  "Dietmar Bartsch", "Sahra Wagenknecht"
+) %>% paste(collapse = "|")
+
+party_leader18 <- c(
+  "Volker Kauder", 
+  "Thomas Oppermann",
+  "Anton Hofreiter", "Katrin Göring-Eckardt",
+  "Dietmar Bartsch", "Sahra Wagenknecht"
+) %>% paste(collapse = "|")
+
+party_leader17 <- c(
+  "Volker Kauder", 
+  "Frank-Walter Steinmeier",
+  "Rainer Brüderle",
+  "Renate Künast", "Jürgen Trittin",
+  "Gregor Gysi"
+) %>% paste(collapse = "|")
+
+party_leader16 <- c(
+  "Volker Kauder", 
+  "Peter Struck",
+  "Birgit Homburger", "Guido Westerwelle",
+  "Renate Künast", "Fritz Kuhn",
+  "Gregor Gysi", "Oskar Lafontaine"
+) %>% paste(collapse = "|")
+
+party_leader15 <- c(
+  "Angela Merkel",
+  "Volker Kauder", 
+  "Franz Müntefering",
+  "Wolfgang Gerhardt",
+  "Krista Sager", "Katrin Göring-Eckardt"
+) %>% paste(collapse = "|")
+
+
+party_leader14 <- c(
+  "Wolfgang Schäuble",
+  "Peter Struck", "Ludwig Stiegler",
+  "Wolfgang Gerhardt",
+  "Kerstin Müller", "Rezzo Schlauch",
+  "Gregor Gysi"
+) %>% paste(collapse = "|")
+
+party_leader13 <- c(
+  "Wolfgang Schäuble",
+  "Rudolf Scharping",
+  "Hermann Otto Solms",
+  "Joschka Fischer", "Kerstin Müller"
+) %>% paste(collapse = "|")
+
+chairs <- c("Bundestagspr.sident", "Bundestagspräsidentin", "Alterspräsident", "Alterspräsidentin", "Bundespräsindet", "Präsidentin", "Präsident")
+```
+
+
+The Bundestags speeches have been parsed before hand. Sentiment predictions, as well as topic assignemnts have been computed seperatly. 
+
+```{r}
+load("data/plenary_final.Rdata")
+
+ps <- plenary_final %>% 
+  mutate(sentz = scale(sent)[, 1]) %>%
+  #filter(party != "none") %>%
+  drop_na(speaker) %>%
+  mutate(gov = ifelse(gov == 1, "Gov", "Opp") %>% factor(., levels = c("Opp", "Gov"))) %>% 
+  mutate(
+    week = lubridate::week(cdate), 
+    year = lubridate::year(cdate),
+    date_index = glue::glue("{year}_{week}")
+  ) %>% 
+  group_by(period) %>% 
+  arrange(desc(cdate)) %>% 
+  mutate(
+    until_elect = cdate %>% as.factor %>% as.numeric,
+    until_elect_week = date_index %>% as.factor %>% as.numeric
+  ) %>% 
+  ungroup %>% 
+  mutate(chair = ifelse(role %in% chairs, 1, 0)) %>% 
+  mutate(minister = ifelse(is.na(party) & !role %in% chairs, 1, 0)) %>% 
+  mutate(
+    party_leader = case_when(
+      period == 19 & str_detect(speaker, party_leader19) ~ 1,
+      period == 18 & str_detect(speaker, party_leader18) ~ 1,
+      period == 17 & str_detect(speaker, party_leader17) ~ 1,
+      period == 16 & str_detect(speaker, party_leader16) ~ 1,
+      period == 15 & str_detect(speaker, party_leader15) ~ 1,
+      period == 14 & str_detect(speaker, party_leader14) ~ 1,
+      period == 13 & str_detect(speaker, party_leader13) ~ 1,
+      T ~ 0
+    )
+  ) %>% 
+  mutate(nword100 = (nword/100)) %>% 
+  mutate(dr = ifelse(is.na(salutation), 0, 1)) %>%
+  mutate(mwordlen = scale(mwordlen)[,1], nword100 = scale(nword)[, 1]) %>% 
+  mutate(afd = ifelse(party == "AfD", 1, 0))
+
+glimpse(ps)
+```
+
+Get an understanding of the missingness in the data.
+
+```{r}
+plenary_final %>% 
+  filter(period == 19) %>%
+  vis_miss()
+```
+
+
+Mean/Median of government and opposition members and a speaker-wise
+comparision of PMs who switch to government status (at least once). 
+
+
+```{r}
+party_box <- ps %>%
+  group_by(cdate, party, gov) %>%
+  summarise(sentz = mean(sentz)) %>%
+  ungroup %>%
+  ggplot(aes(gov, sentz, colour = gov)) +
+  #geom_histogram(color = NA, alpha = .5) +
+  geom_boxplot(alpha = .3) +
+  geom_jitter(alpha = .02) +
+  theme_classic() +
+  scale_colour_manual("", values = c("red", "blue")) +
+  labs(x = "", y = "Standardized Sentiment") + 
+  stat_compare_means(method = "t.test", comparisons = list(c("Gov", "Opp")))
+
+speaker_compare <- ps %>%
+  group_by(speaker, party, gov) %>%
+  summarise(sentz = mean(sentz), n = n()) %>%
+  ungroup %>% 
+  filter(n > 5) %>% 
+  arrange(speaker) %>% 
+  group_by(speaker) %>% 
+  mutate(n_speaker = n()) %>%
+  ungroup %>% 
+  filter(n_speaker > 1) 
+
+gg_speaker <- speaker_compare %>% 
+  #filter(sentz > -1.5) %>% 
+  filter(party %in% c("CDU/CSU", "SPD", "DIE GRÜNEN", "FDP")) %>% 
+  mutate(party = factor(party, levels = c("CDU/CSU", "SPD", "DIE GRÜNEN", "FDP"))) %>% 
+  ggplot(aes(gov, sentz, fill = gov)) +
+  geom_violin(alpha = .4, color = NA) +
+  geom_line(aes(group = speaker), alpha = .1, color = "gray50") +
+  labs(x = "", y = "Standardized Sentiment") + 
+  scale_fill_manual("", values = c("red", "blue")) 
+
+ggpubr::ggarrange(party_box, gg_speaker, ncol=2, nrow=1, common.legend = TRUE, legend="none", labels = c("A", "B"))
+```
+
+
+```{r, fig.width = 10, fig.height= 8}
+# devtools::install_github("yutannihilation/gghighlight")
+vlines <- tibble(
+  cdate = c("2013-12-17", "2009-10-28", "2005-11-22", "1998-10-27") %>%  as.Date
+)
+
+gg_sent_party <- ps %>% 
+  mutate(party = factor(party, levels = c("CDU/CSU", "SPD",  "FDP", "DIE GRÜNEN", "AfD", "DIE LINKE"))) %>% 
+  group_by(year, month, party, gov) %>% 
+  summarise(msent = mean(sentz), cdate = cdate[1]) %>% 
+  ungroup %>% 
+  ggplot(aes(cdate, msent, colour = gov)) +
+  geom_point(alpha = .4) +
+  gghighlight::gghighlight(use_direct_label = F) +
+  facet_wrap(~party, ncol = 2) +
+  geom_smooth(aes(group = party), color = "gray50", alpha = .3) +
+  xlim(as.Date("1986-01-01"), as.Date("2018-08-01")) +
+  scale_colour_manual(values = c("blue", "red"))  +
+  ylim(-1, 1) +
+  theme_classic() +
+  theme(legend.position = "bottom", axis.text.x = element_text(angle = 30)) +
+  geom_vline(data = vlines, aes(xintercept = cdate), linetype = "dashed") 
+
+gg_sent_party
+```
+
+
+
+## Modeling Sentiment
+
+```{r, results='asis'}
+fit_sent_gov_ols1 <- ps %>% 
+  lm(sentz ~ gov, data = .)
+
+fit_sent_gov_ols2 <- ps %>% 
+  lm(sentz ~ gov + party_leader + minister + chair, data = .)
+
+fit_sent_gov_ols3 <- ps %>% 
+  lm(sentz ~ gov + party_leader + minister + chair + until_elect_week + year + mwordlen + log(nword), data = .)
+
+fit_sent_gov_ols4 <- ps %>%
+  lm(sentz ~ gov + party_leader + minister + chair + until_elect_week + year + mwordlen + log(nword) + gender + afd, data = .)
+
+
+
+fit_sent_gov_ml1 <- ps %>% 
+  lmer(sentz ~ gov + (1|party), data = .)
+
+fit_sent_gov_ml2 <- ps %>% 
+  lmer(sentz ~ gov + party_leader + minister + chair + (1|party), data = .)
+
+fit_sent_gov_ml3 <- ps %>% 
+  lmer(sentz ~ gov + party_leader + minister + chair + until_elect_week + year + mwordlen + log(nword) + (1|party), data = .)
+
+fit_sent_gov_ml4 <- ps %>% 
+  lmer(sentz ~ gov + party_leader + minister + chair + until_elect_week + year + mwordlen + log(nword) + gender + afd + (1|party), data = .)
+
+stargazer::stargazer(
+  list(
+    fit_sent_gov_ols2, 
+    fit_sent_gov_ols3, 
+    fit_sent_gov_ols4,
+    fit_sent_gov_ml2, 
+    fit_sent_gov_ml3,
+    fit_sent_gov_ml4
+  ), 
+  type = "html", 
+  header = F, title = "Modeling Government vs Opposition Sentiment", font.size = "scriptsize", style = "ajps"
+  #out = "coef_table.tex"
+)
+```
+
+
+Point Estimates and Confidence Intervals (95%) for each model and term
+
+
+```{r}
+params <- list(
+    #fit_sent_gov_ols2, 
+    fit_sent_gov_ols3, 
+    fit_sent_gov_ols4,
+    #fit_sent_gov_ml2, 
+    fit_sent_gov_ml3,
+    fit_sent_gov_ml4
+  ) %>% 
+  map2(.y = 1:length(.),~{
+    tidy(.x) %>% 
+      mutate(model = paste0(.y)) 
+  }) %>% 
+  bind_rows()
+
+pd <- position_dodge(width = 1.5)
+params %>% 
+  mutate(color = ifelse(estimate > 0, "1", "0")) %>% 
+  mutate(term = forcats::fct_reorder(term, estimate)) %>% 
+  filter(!term %in% c("(Intercept)", "sd_Observation.Residual", "sd_(Intercept).party")) %>% 
+  ggplot(aes(term, estimate, colour = color, shape = model)) +
+  geom_point(position = pd) +
+  geom_linerange(
+    aes(
+      ymin = estimate - 1.96*std.error, 
+      ymax = estimate + 1.96*std.error),
+    position = pd
+  ) +
+  coord_flip() +
+  geom_violin(color = "black") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray70") +
+  guides(colour = F) +
+  scale_colour_manual(values = c("red", "blue"))
+```
+
+
+# Multiligual Sentiment
+
+Download original parlspeech data from [HERE](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/E4RSP9) and place them into the data/parlspeech folder.
+
+
+```{r}
+parl_corpora <- dir("data/parlspeech") %>% 
+  purrr::keep(~str_detect(.x, "Corp")) %>% 
+  #purrr::map(~get(load(.x))) %>%
+  furrr::future_map(~get(load(glue::glue("data/parlspeech/{.x}")))) %>% 
+  map_df(~.x %>% mutate_at(vars(session, speechnumber), as.character)) %>% 
+  mutate(
+    nwords = str_count(text, "\\W+"),
+    nchars = nchar(text)
+  ) %>%
+  mutate(id = glue::glue("{parliament}_{session}_{speechnumber}"))
+
+glimpse(parl_corpora)
+```
+
+
+```{r}
+parl_corpora %>% 
+  filter(nwords > 195 & nwords < 205) %>%
+  .$nchars %>% hist  
+
+parl_corpora %>% 
+  filter(nchars > 495 & nchars < 505) %>%
+  .$nwords %>% hist  
+```
+
+
+## Predict Sentiment
+
+```{r, eval = F}
+library(keras)
+options(scipen = 999)
+
+model <- keras::load_model_hdf5("models/cnn_gru_model_86_mac")
+char_tokenizer <- keras::load_text_tokenizer("models/char_tokenizer_86_mac")
+maxlen <- 500
+
+glimpse(parl_corpora)
+
+parl_preds <- parl_corpora %>%
+  dplyr::select(id, text) %>%
+  mutate(seq = 1:n() %/% 50000) %>%
+  split(.$seq) %>%
+  map_df(~{
+    print(.x$seq[1])
+    parl_char_seq <- char_tokenizer %>% 
+      texts_to_sequences(.x$text) %>% 
+      pad_sequences(maxlen = maxlen, value = 0)
+    
+    preds <- predict(model, x = parl_char_seq) %>%
+      as_tibble() %>% 
+      round(3) %>% 
+      set_names(c("sent", "de", "es", "uk")) 
+    
+    all <- bind_cols(.x, preds) %>%
+      dplyr::select(-text, -seq)
+    
+    return(all)
+  })
+
+glimpse(parl_preds)
+#save(parl_preds, file = "data/parl_preds.Rdata")
+```
+
+Bind columns of sentiment predictions to the parl speech corpora
+
+```{r}
+load("data/parl_preds.Rdata")
+
+parl_final <- parl_corpora %>% 
+  bind_cols(parl_preds) %>%
+  filter(nchars > 20) %>%
+  filter(!chair) %>%
+  filter(party %in% c("Con", "Lab", "LibDem", "UKIP", 
+                      "PSOE", "PP", 
+                      "CDU/CSU", "SPD", "GRUENE", "FDP", "PDS/LINKE")) %>%
+  mutate(sentz = scale(sent)[,1]) %>%
+  mutate(year = date %>% as_date %>% year) %>%
+  mutate(month = date %>% as_date %>% month) %>% 
+  ### Germany
+  mutate(
+    gov = case_when(
+      ## DE
+      year  %in% 2015:2018 & party %in% c("Con") ~ 1,
+      year  %in% 2009:2015 & party == "LibDem" ~ 1,
+      year  %in% 1997:2009 & party %in% "Lab" ~ 1,
+      year  %in% 1990:1997 & party %in% "Con" ~ 1,
+      ## ES
+      year  %in% 2018:2019 & party %in% c("PSOE") ~ 1,
+      year  %in% 2011:2018 & party == "PP" ~ 1,
+      year  %in% 2004:2011 & party %in% "PSOE" ~ 1,
+      year  %in% 1996:2004 & party %in% "PP" ~ 1,
+      year  %in% 1982:1996 & party %in% "PSOE" ~ 1,
+      ## UK
+      year %in% c(2005:2008, 2013:2019) & party %in% c("SPD", "CDU/CSU") ~ 1,
+      year == c(1994:1997,  2009:2012) & party %in% c("FDP", "CDU/CSU") ~ 1,
+      year %in% 1998:2004 & party %in% c("SPD", "GRUENE") ~ 1,
+      F ~ 0
+    ) %>% ifelse(is.na(.), 0, .)
+  )
+
+## check the join
+(parl_final$id1 == parl_final$id) %>% table
+
+parl_final %>% glimpse
+```
+
+
+```{r}
+parl_final %>%
+  mutate(parliament = factor(parliament, levels = c("UK-HoC", "DE-Bundestag", "ES-Congresso"))) %>%
+  mutate(gov = ifelse(gov == 1, "Gov", "Opp") %>% factor(., levels = c("Opp", "Gov"))) %>% 
+  group_by(parliament, speaker, gov) %>%
+  summarise(sentz = mean(sentz), n = n(), sent = mean(sent)) %>%
+  ungroup %>% 
+  filter(n > 5) %>% 
+  arrange(speaker) %>% 
+  group_by(speaker) %>% 
+  mutate(n_speaker = n()) %>%
+  ungroup %>% 
+  filter(n_speaker > 1) %>%
+  # group_by(parliament) %>%
+  # mutate(sentzp = scale(sent)[,1]) %>%
+  # ungroup %>% 
+  ggplot(aes(gov, sentz, fill = gov)) +
+  geom_violin(alpha = .4, color = NA) +
+  geom_line(aes(group = speaker), alpha = .2, color = "gray50", size = .3) +
+  labs(x = "", y = "Standardized Sentiment") + 
+  scale_fill_manual("", values = c("red", "blue")) +
+  facet_wrap(~parliament) +
+  theme(legend.position = "none")
+```
+
+
+```{r}
+sent_compare_de <- parl_final %>% 
+  filter(nchars > 20) %>%
+  filter(!chair) %>%
+  filter(parliament == "DE-Bundestag") %>%
+  filter(party != "independent") %>%
+  mutate(sentz = scale(sent)[,1]) %>%
+  mutate(year = date %>% as_date %>% year) %>%
+  mutate(month = date %>% as_date %>% month) %>% 
+  group_by(parliament, year, party, gov) %>%
+  summarise(msent = mean(sentz, na.rm = T), n = n()) %>% 
+  ungroup 
+
+party_colors  <- c("SPD" = "#E2001A", 
+                   "CDU/CSU" = "black", #"#e95d0f", 
+                   "GRUENE" = "#46962b", 
+                   "PDS/LINKE" = "#8B1A1A", 
+                   "FDP" = "#ffed00",
+                   "AfD" = "#00BFFF")
+
+sent_compare_de  %>%
+  ggplot(aes(year, msent, colour = party)) +
+  geom_line() + 
+  facet_wrap(~party) +
+  scale_fill_manual(values = c("white", "gray50")) +
+  scale_colour_manual(values = party_colors) +
+  theme(legend.position = "bottom") +
+  guides(color = F) +
+  add_election(sent_compare_de)
+```
+
+
+```{r}
+sent_compare_uk <- parl_final %>%
+  filter(nchars > 20) %>%
+  filter(!chair) %>%
+  filter(parliament == "UK-HoC") %>%
+  filter(party %in% c("Con", "Lab", "LibDem", "UKIP")) %>%
+  mutate(party = as.character(party)) %>%
+  mutate(sentz = scale(sent)[,1]) %>%
+  mutate(year = date %>% as_date %>% year) %>%
+  mutate(month = date %>% as_date %>% month) %>% 
+  group_by(parliament, year, party, gov) %>%
+  summarise(msent = mean(sentz, na.rm = T), n = n()) %>% 
+  ungroup
+
+sent_compare_uk  %>%
+  ggplot(aes(year, msent, colour = party)) +
+  geom_line() + 
+  facet_wrap(~party) +
+  scale_fill_manual(values = c("white", "gray50")) +
+  theme(legend.position = "bottom") +
+  guides(color = F) +
+  add_election(sent_compare_uk)
+```
+
+
+```{r}
+sent_compare_es <- parl_final %>% 
+  filter(nchars > 20) %>%
+  filter(!chair) %>%
+  filter(parliament == "ES-Congresso") %>%
+  filter(party %in% c("PSOE", "PP")) %>% # , "IU", "CiU"
+  mutate(sentz = scale(sent)[,1]) %>%
+  mutate(year = date %>% as_date %>% year) %>%
+  mutate(month = date %>% as_date %>% month) %>% 
+  group_by(parliament, year, party, gov) %>%
+  summarise(msent = mean(sentz, na.rm = T), n = n()) %>% 
+  ungroup
+
+sent_compare_es  %>%
+  ggplot(aes(year, msent, colour = party)) +
+  geom_line() + 
+  facet_wrap(~party, ncol = 1) +
+  scale_fill_manual(values = c("white", "gray50")) +
+  add_election(sent_compare_es)
+```
+
+
+# Session
+
+```{r}
+sessionInfo()
+```
+
