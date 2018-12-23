@@ -1,6 +1,8 @@
 The Good, the Bad, and the Ugly
 ================
 
+This repo stores code and graphics from my thesis project which investigates the use of sentiment in parliamentary speeches. For this purpose I parsed German Parliamentary speeches between 1989 and 2018. The core results have been tested with the ParlSpeech Corpus in a multilingual comparison.
+
 Packages
 --------
 
@@ -22,14 +24,19 @@ add_election <- function(x){
       )
     })
 }
+
+party_colors  <- c("SPD" = "#E2001A", 
+                   "CDU/CSU" = "black", #"#e95d0f", 
+                   "GRUENE" = "#46962b", 
+                   "PDS/LINKE" = "#8B1A1A", 
+                   "FDP" = "#ffed00",
+                   "AfD" = "#00BFFF")
 ```
 
 German Bundestag Speeches
 =========================
 
-Parsed from XML Files.
-
-This is the regex to extract features like party\_leder (group) for each legislative period.
+This is the regex to extract features like party\_leader (group) for each legislative period.
 
 ``` r
 party_leader19 <- c(
@@ -91,7 +98,7 @@ party_leader13 <- c(
 chairs <- c("Bundestagspr.sident", "Bundestagspräsidentin", "Alterspräsident", "Alterspräsidentin", "Bundespräsindet", "Präsidentin", "Präsident")
 ```
 
-The Bundestags speeches have been parsed before hand. Sentiment predictions, as well as topic assignemnts have been computed seperatly.
+The Bundestag speeches have been parsed before hand and can be downloaded [HERE](https://mega.nz/#!FxljHKSI!a6v21YAb0U6YS93YRJaS0oilSSB3ppUEtNT8ihPXzFk). Sentiment predictions, as well as topic assignments have been already attached. If you are interest in how these got computed, please refer to the multiligual part, where the prediction process is illustrated. The model and tokenizer is included fpr reproducability. Please also see the session info for package versions at the end of the document.
 
 ``` r
 load("data/plenary_final.Rdata")
@@ -202,7 +209,7 @@ plenary_final %>%
 
 ![](Readme_files/figure-markdown_github/unnamed-chunk-4-1.png)
 
-Mean/Median of government and opposition members and a speaker-wise comparision of PMs who switch to government status (at least once).
+Mean/Median of government and opposition members and a speaker-wise comparison of PMs who switch to government status (at least once).
 
 ``` r
 party_box <- ps %>%
@@ -1037,6 +1044,36 @@ params %>%
 
 ![](Readme_files/figure-markdown_github/unnamed-chunk-8-1.png)
 
+``` r
+rs_nword <- ps %>%
+  filter(period == 19) %>% 
+  drop_na(party) %>% 
+  filter(party != "none") %>% 
+  ggplot(aes(log(nword), sentz, colour = party)) +
+  geom_smooth(method = "lm") +
+  scale_colour_manual(values = party_colors) +
+  theme_classic() +
+  labs(x = "Log Number of Words", y = "Standardized Sentiment") +
+  theme(legend.position = "none")
+
+rs_mwordlen <- ps %>%
+  filter(period == 19) %>% 
+  drop_na(party) %>% 
+  filter(party != "none") %>% 
+  ggplot(aes(mwordlen, sentz, colour = party)) +
+  geom_smooth(method = "lm") +
+  scale_colour_manual("", values = party_colors) +
+  theme_classic() +
+  labs(x = "Mean Word Length (mwordlen)", y = "Standardized Sentiment") +
+  theme(legend.position = "none") +
+  xlim(-2.5, 2.5)
+
+library(ggpubr)
+ggarrange(rs_nword, rs_mwordlen, ncol=2, nrow=1, common.legend = TRUE, legend="bottom", labels = c("A", "B"))
+```
+
+![](Readme_files/figure-markdown_github/unnamed-chunk-9-1.png)
+
 Multiligual Sentiment
 =====================
 
@@ -1078,7 +1115,7 @@ parl_corpora %>%
   .$nchars %>% hist  
 ```
 
-![](Readme_files/figure-markdown_github/unnamed-chunk-10-1.png)
+![](Readme_files/figure-markdown_github/unnamed-chunk-11-1.png)
 
 ``` r
 parl_corpora %>% 
@@ -1086,7 +1123,7 @@ parl_corpora %>%
   .$nwords %>% hist  
 ```
 
-![](Readme_files/figure-markdown_github/unnamed-chunk-10-2.png)
+![](Readme_files/figure-markdown_github/unnamed-chunk-11-2.png)
 
 Predict Sentiment
 -----------------
@@ -1126,7 +1163,7 @@ glimpse(parl_preds)
 #save(parl_preds, file = "data/parl_preds.Rdata")
 ```
 
-Bind columns of sentiment predictions to the parl speech corpora
+Bind columns of sentiment predictions to the parlspeech corpora
 
 ``` r
 load("data/parl_preds.Rdata")
@@ -1224,7 +1261,7 @@ parl_final %>%
   theme(legend.position = "none")
 ```
 
-![](Readme_files/figure-markdown_github/unnamed-chunk-13-1.png)
+![](Readme_files/figure-markdown_github/unnamed-chunk-14-1.png)
 
 ``` r
 sent_compare_de <- parl_final %>% 
@@ -1239,13 +1276,6 @@ sent_compare_de <- parl_final %>%
   summarise(msent = mean(sentz, na.rm = T), n = n()) %>% 
   ungroup 
 
-party_colors  <- c("SPD" = "#E2001A", 
-                   "CDU/CSU" = "black", #"#e95d0f", 
-                   "GRUENE" = "#46962b", 
-                   "PDS/LINKE" = "#8B1A1A", 
-                   "FDP" = "#ffed00",
-                   "AfD" = "#00BFFF")
-
 sent_compare_de  %>%
   ggplot(aes(year, msent, colour = party)) +
   geom_line() + 
@@ -1257,7 +1287,7 @@ sent_compare_de  %>%
   add_election(sent_compare_de)
 ```
 
-![](Readme_files/figure-markdown_github/unnamed-chunk-14-1.png)
+![](Readme_files/figure-markdown_github/unnamed-chunk-15-1.png)
 
 ``` r
 sent_compare_uk <- parl_final %>%
@@ -1283,7 +1313,7 @@ sent_compare_uk  %>%
   add_election(sent_compare_uk)
 ```
 
-![](Readme_files/figure-markdown_github/unnamed-chunk-15-1.png)
+![](Readme_files/figure-markdown_github/unnamed-chunk-16-1.png)
 
 ``` r
 sent_compare_es <- parl_final %>% 
@@ -1306,7 +1336,7 @@ sent_compare_es  %>%
   add_election(sent_compare_es)
 ```
 
-![](Readme_files/figure-markdown_github/unnamed-chunk-16-1.png)
+![](Readme_files/figure-markdown_github/unnamed-chunk-17-1.png)
 
 Session
 =======
@@ -1354,6 +1384,7 @@ sessionInfo()
     ## [40] rlang_0.3.0.1          grid_3.5.1             nloptr_1.2.1          
     ## [43] rstudioapi_0.8         labeling_0.3           rmarkdown_1.10        
     ## [46] gtable_0.2.0           codetools_0.2-15       abind_1.4-5           
-    ## [49] R6_2.3.0               knitr_1.20             bindr_0.1.1           
-    ## [52] rprojroot_1.3-2        stringi_1.2.4          parallel_3.5.1        
-    ## [55] Rcpp_1.0.0             tidyselect_0.2.5       coda_0.19-2
+    ## [49] R6_2.3.0               gridExtra_2.3          knitr_1.20            
+    ## [52] bindr_0.1.1            rprojroot_1.3-2        stringi_1.2.4         
+    ## [55] parallel_3.5.1         Rcpp_1.0.0             tidyselect_0.2.5      
+    ## [58] coda_0.19-2
